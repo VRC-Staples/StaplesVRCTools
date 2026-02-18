@@ -195,10 +195,13 @@ def _efit_preview_update(context):
                 for vi in fitted_indices:
                     current_positions[vi] = cloth.data.vertices[vi].co.copy()
 
-                kd_follow = KDTree(len(fitted_indices))
-                for i, vi in enumerate(fitted_indices):
-                    kd_follow.insert(all_originals[vi], i)
-                kd_follow.balance()
+                kd_follow = c.get('kd_follow')
+                if kd_follow is None:
+                    kd_follow = KDTree(len(fitted_indices))
+                    for i, vi in enumerate(fitted_indices):
+                        kd_follow.insert(all_originals[vi], i)
+                    kd_follow.balance()
+                    c['kd_follow'] = kd_follow
 
                 K_follow = min(p.follow_neighbors, len(fitted_indices))
                 for vi in preserved_indices:
@@ -217,9 +220,12 @@ def _efit_preview_update(context):
                         cloth.data.vertices[vi].co = rest_pos + avg_disp * strength
 
         cloth.data.update()
-        for area in context.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.tag_redraw()
+        if context.screen:
+            for area in context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+    except Exception:
+        pass
     finally:
         _efit_updating = False
 
@@ -412,6 +418,9 @@ class EFitProperties(PropertyGroup):
 
 def _remove_efit(obj):
     """Remove all EFit_ modifiers and restore preserved vertex positions."""
+    global _efit_cache
+    _efit_cache.clear()
+
     for m in [m for m in obj.modifiers if m.name.startswith(EFIT_PREFIX)]:
         obj.modifiers.remove(m)
 
@@ -510,6 +519,10 @@ class EFIT_OT_fit(Operator):
 
         if context.active_object and context.active_object.mode != 'OBJECT':
             bpy.ops.object.mode_set(mode='OBJECT')
+
+        # Clear any active preview before starting a new fit
+        global _efit_cache
+        _efit_cache.clear()
 
         if p.cleanup:
             _remove_efit(cloth)
@@ -810,7 +823,6 @@ class EFIT_OT_fit(Operator):
         # ================================================================
         #  Populate preview cache — slider changes will re-apply from here
         # ================================================================
-        global _efit_cache
         _efit_cache = {
             'cloth_name': cloth.name,
             'all_originals': all_originals,
