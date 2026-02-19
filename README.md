@@ -26,12 +26,23 @@ Fits clothing meshes onto body meshes using a high-poly proxy for smooth deforma
 
 ## Installation
 
-1. Download the latest `StaplesVRCTools.zip` from the [Releases](../../releases) page
+### Full Suite (Elastic Fit + Armature Tools)
+
+1. Download `StaplesVRCTools.zip` from the [Releases](../../releases) page
 2. In Blender, go to **Edit > Preferences > Add-ons**
 3. Click **Install** and select the downloaded `.zip` file
 4. Enable **Staples VRC Tools** in the add-on list
 
 The panel appears in **View3D > Sidebar (N) > StaplesVRCTools**.
+
+### Elastic Clothing Fit (Standalone)
+
+1. Download `ElasticClothingFit.zip` from the [Releases](../../releases) page
+2. In Blender, go to **Edit > Preferences > Add-ons**
+3. Click **Install** and select the downloaded `.zip` file
+4. Enable **Elastic Clothing Fit** in the add-on list
+
+The panel appears in **View3D > Sidebar (N) > Elastic Fit**.
 
 ## Usage
 

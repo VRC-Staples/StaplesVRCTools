@@ -1,10 +1,8 @@
 # ============================================================================
-#  Staples VRC Tools — Blender Add-on
+#  Elastic Clothing Fit — Blender Add-on
 # ============================================================================
 #
-#  Combined toolset for VRC avatar workflow:
-#    - Armature Tools: Stick display + In Front for all armatures
-#    - Elastic Clothing Fit: Proxy-based clothing fitting with UV preservation
+#  Proxy-based clothing fitting with UV preservation and live preview.
 #
 #  Copyright (C) 2026 .Staples.
 #
@@ -24,12 +22,12 @@
 # ============================================================================
 
 bl_info = {
-    "name": "Staples VRC Tools",
+    "name": "Elastic Clothing Fit",
     "author": ".Staples.",
     "version": (0, 2, 16),
     "blender": (3, 0, 0),
-    "location": "View3D > Sidebar > StaplesVRCTools",
-    "description": "Misc Tools for VRC Avatar Workflow",
+    "location": "View3D > Sidebar > Elastic Fit",
+    "description": "Proxy-based clothing fitting with live preview and UV preservation",
     "category": "3D View",
 }
 
@@ -43,54 +41,8 @@ from bpy.props import (
 )
 from bpy.types import PropertyGroup, Panel, Operator
 
-
-# ============================================================================
-#  ARMATURE TOOLS
-# ============================================================================
-
-def apply_to_armatures(context, include_hidden=True):
-    count = 0
-    for obj in bpy.data.objects:
-        if obj.type != "ARMATURE":
-            continue
-
-        if not include_hidden:
-            if obj.hide_viewport:
-                continue
-
-        # Set Display type to Stick
-        if obj.data is not None:
-            obj.data.display_type = 'STICK'
-
-        # Set Display Setting to In Front
-        obj.show_in_front = True
-
-        count += 1
-
-    return count
-
-
-class ARMATURETOOLS_OT_apply_stick_infront(Operator):
-    bl_idname = "armaturetools.apply_stick_infront"
-    bl_label = "Apply Stick + In Front"
-    bl_description = "Set all armatures to Stick display and enable In Front"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    include_hidden: BoolProperty(
-        name="Include Hidden",
-        description="Also apply to armatures hidden in the viewport",
-        default=True,
-    )
-
-    def execute(self, context):
-        count = apply_to_armatures(context, include_hidden=self.include_hidden)
-        self.report({'INFO'}, f"Updated {count} armature(s).")
-        return {'FINISHED'}
-
-
-# ============================================================================
-#  ELASTIC CLOTHING FIT
-# ============================================================================
+# Sidebar tab name — overridden by __init__.py when used as part of a package
+PANEL_CATEGORY = "Elastic Fit"
 
 EFIT_PREFIX = "EFit_"
 
@@ -1076,30 +1028,14 @@ class EFIT_OT_reset_defaults(Operator):
         return {'FINISHED'}
 
 
-# ============================================================================
-#  PANELS
-# ============================================================================
-
-class SVRC_PT_armature_tools(Panel):
-    bl_label = "Armature Tools"
-    bl_idname = "SVRC_PT_armature_tools"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = "StaplesVRCTools"
-    bl_order = 0
-
-    def draw(self, context):
-        layout = self.layout
-        op = layout.operator("armaturetools.apply_stick_infront", icon='ARMATURE_DATA')
-        op.include_hidden = True
-
+# -- Panel --
 
 class SVRC_PT_elastic_fit(Panel):
     bl_label = "Elastic Clothing Fit"
     bl_idname = "SVRC_PT_elastic_fit"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "StaplesVRCTools"
+    bl_category = PANEL_CATEGORY
     bl_order = 1
 
     def draw(self, context):
@@ -1218,14 +1154,12 @@ class SVRC_PT_elastic_fit(Panel):
 
 _classes = (
     EFitProperties,
-    ARMATURETOOLS_OT_apply_stick_infront,
     EFIT_OT_fit,
     EFIT_OT_preview_apply,
     EFIT_OT_preview_cancel,
     EFIT_OT_remove,
     EFIT_OT_reset_defaults,
     EFIT_OT_clear_blockers,
-    SVRC_PT_armature_tools,
     SVRC_PT_elastic_fit,
 )
 
