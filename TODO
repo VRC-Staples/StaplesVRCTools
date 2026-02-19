@@ -1,6 +1,0 @@
-Todo List
-##############
-## Elastic Fit
-##############
-- Add a note for all sliders that are not displayed in the preview
-- Add an advanced section that will allow the user to add 1 to many vertex groups each with a slider to represent the % of influence the offset will affect those verts. (make the value range from 0 - 200%)
