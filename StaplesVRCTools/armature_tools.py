@@ -24,7 +24,7 @@
 bl_info = {
     "name": "Armature Tools",
     "author": ".Staples.",
-    "version": (0, 2, 16),
+    "version": (1, 0, 0),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > Armature Tools",
     "description": "Set all armatures to Stick display with In Front enabled",

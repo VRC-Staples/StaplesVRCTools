@@ -26,7 +26,7 @@
 bl_info = {
     "name": "Staples VRC Tools",
     "author": ".Staples.",
-    "version": (0, 2, 16),
+    "version": (1, 0, 0),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > StaplesVRCTools",
     "description": "Misc Tools for VRC Avatar Workflow",
