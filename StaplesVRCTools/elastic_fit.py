@@ -24,9 +24,9 @@
 bl_info = {
     "name": "Elastic Clothing Fit",
     "author": ".Staples.",
-    "version": (0, 2, 16),
+    "version": (1, 0, 0),
     "blender": (3, 0, 0),
-    "location": "View3D > Sidebar > Elastic Fit",
+    "location": "View3D > Sidebar > .Staples. Elastic Fit",
     "description": "Proxy-based clothing fitting with live preview and UV preservation",
     "category": "3D View",
 }
@@ -37,12 +37,12 @@ import mathutils
 from mathutils.kdtree import KDTree
 from bpy.props import (
     PointerProperty, FloatProperty, IntProperty, BoolProperty,
-    StringProperty, EnumProperty,
+    StringProperty, EnumProperty, CollectionProperty,
 )
 from bpy.types import PropertyGroup, Panel, Operator
 
 # Sidebar tab name — overridden by __init__.py when used as part of a package
-PANEL_CATEGORY = "Elastic Fit"
+PANEL_CATEGORY = ".Staples. Elastic Fit"
 
 EFIT_PREFIX = "EFit_"
 
@@ -171,6 +171,25 @@ def _efit_preview_update(context):
                         avg_disp = total_disp / total_weight
                         cloth.data.vertices[vi].co = rest_pos + avg_disp * strength
 
+        # Apply per-vertex offset fine-tuning from offset groups
+        offset_group_weights = c.get('offset_group_weights', {})
+        original_offset = c.get('original_offset', 0.0)
+        if offset_group_weights and original_offset != 0.0:
+            for og in p.offset_groups:
+                if not og.group_name:
+                    continue
+                weights = offset_group_weights.get(og.group_name)
+                if not weights:
+                    continue
+                mult_delta = og.influence / 100.0 - 1.0
+                if abs(mult_delta) < 0.0001:
+                    continue
+                for vi, w in weights.items():
+                    if vi in cloth_body_normals:
+                        cloth.data.vertices[vi].co += (
+                            cloth_body_normals[vi] * (original_offset * mult_delta * w)
+                        )
+
         cloth.data.update()
         if context.screen:
             for area in context.screen.areas:
@@ -186,6 +205,119 @@ def _on_preview_prop_update(self, context):
     """Property update callback — triggers preview recompute."""
     if _efit_cache:
         _efit_preview_update(context)
+
+
+def _sync_preview_modifiers(cloth, p, has_preserve, preserve_name):
+    """Add, update, or remove the live preview smooth modifiers on the cloth
+    to match current property values.  Called at fit start and from slider
+    update callbacks during preview.
+    """
+    # -- Corrective Smooth --
+    m_cs = cloth.modifiers.get(f"{EFIT_PREFIX}Smooth")
+    if p.smooth_iterations > 0:
+        if m_cs is None:
+            m_cs = cloth.modifiers.new(f"{EFIT_PREFIX}Smooth", 'CORRECTIVE_SMOOTH')
+            m_cs.smooth_type = 'SIMPLE'
+            m_cs.use_only_smooth = False
+            if has_preserve and preserve_name:
+                m_cs.vertex_group = preserve_name
+                m_cs.invert_vertex_group = True
+        m_cs.factor = p.smooth_factor
+        m_cs.iterations = p.smooth_iterations
+    else:
+        if m_cs is not None:
+            cloth.modifiers.remove(m_cs)
+
+    # -- Laplacian Smooth --
+    m_lap = cloth.modifiers.get(f"{EFIT_PREFIX}Laplacian")
+    if p.post_laplacian:
+        if m_lap is None:
+            m_lap = cloth.modifiers.new(f"{EFIT_PREFIX}Laplacian", 'LAPLACIANSMOOTH')
+            m_lap.lambda_border = 0.0
+            m_lap.use_volume_preserve = True
+            m_lap.use_normalized = True
+            if has_preserve and preserve_name:
+                m_lap.vertex_group = preserve_name
+                m_lap.invert_vertex_group = True
+        m_lap.lambda_factor = p.laplacian_factor
+        m_lap.iterations = p.laplacian_iterations
+    else:
+        if m_lap is not None:
+            cloth.modifiers.remove(m_lap)
+
+
+def _on_smooth_mod_update(self, context):
+    """Sync live preview smooth modifiers when their sliders change."""
+    if not _efit_cache:
+        return
+    cloth = bpy.data.objects.get(_efit_cache.get('cloth_name', ''))
+    if cloth is None:
+        return
+    p = context.scene.efit_props
+    _sync_preview_modifiers(
+        cloth, p,
+        _efit_cache.get('has_preserve', False),
+        _efit_cache.get('preserve_name', ''),
+    )
+    if context.screen:
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+
+
+def _on_offset_group_influence_update(self, context):
+    """Refresh preview when an offset group influence slider changes."""
+    if _efit_cache:
+        _efit_preview_update(context)
+
+
+def _on_offset_group_name_update(self, context):
+    """Recompute cached vertex weights and refresh preview when a group name changes."""
+    if not _efit_cache:
+        return
+    cloth = bpy.data.objects.get(_efit_cache.get('cloth_name', ''))
+    if cloth is None:
+        return
+    fitted_indices = _efit_cache.get('fitted_indices', [])
+    p = context.scene.efit_props
+    offset_group_weights = {}
+    for og in p.offset_groups:
+        if not og.group_name:
+            continue
+        vg = cloth.vertex_groups.get(og.group_name)
+        if vg is None:
+            continue
+        weights = {}
+        for vi in fitted_indices:
+            try:
+                w = vg.weight(vi)
+            except RuntimeError:
+                w = 0.0
+            if w > 0.0:
+                weights[vi] = w
+        if weights:
+            offset_group_weights[og.group_name] = weights
+    _efit_cache['offset_group_weights'] = offset_group_weights
+    _efit_preview_update(context)
+
+
+class EFitOffsetGroup(PropertyGroup):
+    """One vertex group / influence pair for per-group offset fine-tuning."""
+    group_name: StringProperty(
+        name="Vertex Group",
+        description="Vertex group whose offset influence will be adjusted",
+        default="",
+        update=_on_offset_group_name_update,
+    )
+    influence: IntProperty(
+        name="Influence",
+        description="Offset influence for this group: 100 = base offset, 0 = no offset, 200 = double offset",
+        default=100,
+        min=0,
+        max=200,
+        subtype='PERCENTAGE',
+        update=_on_offset_group_influence_update,
+    )
 
 
 class EFitProperties(PropertyGroup):
@@ -245,6 +377,7 @@ class EFitProperties(PropertyGroup):
         default=0.75,
         min=0.0,
         max=2.0,
+        update=_on_smooth_mod_update,
     )
     smooth_iterations: IntProperty(
         name="Elastic Iterations",
@@ -252,6 +385,7 @@ class EFitProperties(PropertyGroup):
         default=10,
         min=0,
         max=100,
+        update=_on_smooth_mod_update,
     )
 
     # -- Post-fit options --
@@ -279,6 +413,7 @@ class EFitProperties(PropertyGroup):
         name="Laplacian Smooth",
         description="Apply Laplacian smoothing after fitting to reduce noise while preserving shape",
         default=False,
+        update=_on_smooth_mod_update,
     )
     laplacian_factor: FloatProperty(
         name="Laplacian Factor",
@@ -286,6 +421,7 @@ class EFitProperties(PropertyGroup):
         default=0.25,
         min=0.0,
         max=10.0,
+        update=_on_smooth_mod_update,
     )
     laplacian_iterations: IntProperty(
         name="Laplacian Iterations",
@@ -293,6 +429,7 @@ class EFitProperties(PropertyGroup):
         default=1,
         min=1,
         max=50,
+        update=_on_smooth_mod_update,
     )
 
     # -- Preserve group (optional) --
@@ -363,6 +500,14 @@ class EFitProperties(PropertyGroup):
         min=1,
         max=32,
         update=_on_preview_prop_update,
+    )
+
+    # -- Offset fine-tuning groups --
+
+    offset_groups: CollectionProperty(
+        name="Offset Groups",
+        type=EFitOffsetGroup,
+        description="Per-vertex-group offset influence overrides",
     )
 
 
@@ -661,6 +806,25 @@ class EFIT_OT_fit(Operator):
             else:
                 cloth_body_normals[vi] = mathutils.Vector((0.0, 0.0, 0.0))
 
+        # Precompute vertex group weights for offset fine-tuning
+        offset_group_weights = {}
+        for og in p.offset_groups:
+            if not og.group_name:
+                continue
+            vg = cloth.vertex_groups.get(og.group_name)
+            if vg is None:
+                continue
+            og_weights = {}
+            for vi in fitted_indices:
+                try:
+                    w = vg.weight(vi)
+                except RuntimeError:
+                    w = 0.0
+                if w > 0.0:
+                    og_weights[vi] = w
+            if og_weights:
+                offset_group_weights[og.group_name] = og_weights
+
         # Build clothing mesh adjacency for fitted vertices
         fitted_set = set(fitted_indices)
         cloth_adj = {vi: [] for vi in fitted_indices}
@@ -772,6 +936,25 @@ class EFIT_OT_fit(Operator):
 
                 cloth.data.update()
 
+        # Apply initial offset group fine-tuning
+        if offset_group_weights:
+            base_offset = p.offset
+            for og in p.offset_groups:
+                if not og.group_name:
+                    continue
+                og_weights = offset_group_weights.get(og.group_name)
+                if not og_weights:
+                    continue
+                mult_delta = og.influence / 100.0 - 1.0
+                if abs(mult_delta) < 0.0001:
+                    continue
+                for vi, w in og_weights.items():
+                    if vi in cloth_body_normals:
+                        cloth.data.vertices[vi].co += (
+                            cloth_body_normals[vi] * (base_offset * mult_delta * w)
+                        )
+            cloth.data.update()
+
         # ================================================================
         #  Populate preview cache — slider changes will re-apply from here
         # ================================================================
@@ -787,12 +970,16 @@ class EFIT_OT_fit(Operator):
             'saved_uvs': saved_uvs,
             'cloth_body_normals': cloth_body_normals,
             'original_offset': p.offset,
+            'offset_group_weights': offset_group_weights,
         }
 
         # Reselect clothing
         bpy.ops.object.select_all(action='DESELECT')
         cloth.select_set(True)
         context.view_layer.objects.active = cloth
+
+        # Add live preview modifiers so smoothing is visible immediately
+        _sync_preview_modifiers(cloth, p, has_preserve, preserve_name)
 
         self.report({'INFO'},
                     f"Preview ready — adjust sliders, then Apply or Cancel. "
@@ -837,17 +1024,10 @@ class EFIT_OT_preview_apply(Operator):
         context.view_layer.objects.active = cloth
 
         # ================================================================
-        #  Corrective Smooth (add and apply)
+        #  Corrective Smooth (apply the live preview modifier if present)
         # ================================================================
-        if p.smooth_iterations > 0:
-            m_cs = cloth.modifiers.new(f"{EFIT_PREFIX}Smooth", 'CORRECTIVE_SMOOTH')
-            m_cs.factor = p.smooth_factor
-            m_cs.iterations = p.smooth_iterations
-            m_cs.smooth_type = 'SIMPLE'
-            m_cs.use_only_smooth = False
-            if has_preserve and preserve_name:
-                m_cs.vertex_group = preserve_name
-                m_cs.invert_vertex_group = True
+        m_cs = cloth.modifiers.get(f"{EFIT_PREFIX}Smooth")
+        if m_cs is not None:
             bpy.ops.object.modifier_apply(modifier=m_cs.name)
 
         # ================================================================
@@ -876,25 +1056,16 @@ class EFIT_OT_preview_apply(Operator):
             bpy.ops.object.mode_set(mode='OBJECT')
 
         # ================================================================
-        #  Laplacian Smooth (add and apply)
+        #  Laplacian Smooth (apply the live preview modifier if present)
         # ================================================================
-        if p.post_laplacian:
-            m_lap = cloth.modifiers.new(f"{EFIT_PREFIX}Laplacian", 'LAPLACIANSMOOTH')
-            m_lap.lambda_factor = p.laplacian_factor
-            m_lap.lambda_border = 0.0
-            m_lap.iterations = p.laplacian_iterations
-            m_lap.use_volume_preserve = True
-            m_lap.use_normalized = True
-            if has_preserve and preserve_name:
-                m_lap.vertex_group = preserve_name
-                m_lap.invert_vertex_group = True
+        m_lap = cloth.modifiers.get(f"{EFIT_PREFIX}Laplacian")
+        if m_lap is not None:
             bpy.ops.object.modifier_apply(modifier=m_lap.name)
 
         # Restore UVs if needed
         if saved_uvs:
             _restore_uvs(cloth.data, saved_uvs)
 
-        # Clear cache
         _efit_cache.clear()
 
         bpy.ops.object.select_all(action='DESELECT')
@@ -929,6 +1100,12 @@ class EFIT_OT_preview_cancel(Operator):
             self.report({'ERROR'}, "Clothing object no longer exists.")
             return {'CANCELLED'}
         all_originals = c['all_originals']
+
+        # Remove live preview modifiers before restoring vertex positions
+        for mod_name in (f"{EFIT_PREFIX}Smooth", f"{EFIT_PREFIX}Laplacian"):
+            m = cloth.modifiers.get(mod_name)
+            if m is not None:
+                cloth.modifiers.remove(m)
 
         for vi, co in all_originals.items():
             cloth.data.vertices[vi].co = co
@@ -1028,6 +1205,39 @@ class EFIT_OT_reset_defaults(Operator):
         return {'FINISHED'}
 
 
+# -- Offset group add / remove operators --
+
+class EFIT_OT_offset_group_add(Operator):
+    """Add a new vertex group offset entry."""
+    bl_idname = "efit.offset_group_add"
+    bl_label = "Add Offset Group"
+    bl_description = "Add a vertex group whose offset influence can be fine-tuned"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        item = context.scene.efit_props.offset_groups.add()
+        item.influence = 100
+        return {'FINISHED'}
+
+
+class EFIT_OT_offset_group_remove(Operator):
+    """Remove the offset group entry at the given index."""
+    bl_idname = "efit.offset_group_remove"
+    bl_label = "Remove Offset Group"
+    bl_description = "Remove this vertex group offset entry"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    index: IntProperty()
+
+    def execute(self, context):
+        groups = context.scene.efit_props.offset_groups
+        if 0 <= self.index < len(groups):
+            groups.remove(self.index)
+            if _efit_cache:
+                _efit_preview_update(context)
+        return {'FINISHED'}
+
+
 # -- Panel --
 
 class SVRC_PT_elastic_fit(Panel):
@@ -1041,9 +1251,11 @@ class SVRC_PT_elastic_fit(Panel):
     def draw(self, context):
         layout = self.layout
         p = context.scene.efit_props
+        in_preview = bool(_efit_cache)
 
         # -- Mesh selection --
         box = layout.box()
+        box.enabled = not bool(_efit_cache)
         box.label(text="Select Meshes", icon='MESH_DATA')
         box.prop(p, "body_obj", icon='OUTLINER_OB_MESH')
         box.prop(p, "clothing_obj", icon='MATCLOTH')
@@ -1071,8 +1283,18 @@ class SVRC_PT_elastic_fit(Panel):
         box.label(text="Fit Settings", icon='MOD_SHRINKWRAP')
         box.prop(p, "fit_amount", slider=True)
         box.prop(p, "offset")
-        box.prop(p, "proxy_triangles")
-        box.prop(p, "preserve_uvs")
+
+        row = box.row()
+        row.enabled = not in_preview
+        row.prop(p, "proxy_triangles")
+        if in_preview:
+            row.label(text="(not available in preview mode)", icon='INFO')
+
+        row = box.row()
+        row.enabled = not in_preview
+        row.prop(p, "preserve_uvs")
+        if in_preview:
+            row.label(text="(not available in preview mode)", icon='INFO')
 
         # -- Elastic smoothing --
         box = layout.box()
@@ -1085,9 +1307,12 @@ class SVRC_PT_elastic_fit(Panel):
         box.label(text="Post-Fit Options", icon='TOOL_SETTINGS')
 
         row = box.row()
+        row.enabled = not in_preview
         row.prop(p, "post_symmetrize")
-        if p.post_symmetrize:
+        if p.post_symmetrize and not in_preview:
             row.prop(p, "symmetrize_axis", text="")
+        elif in_preview:
+            row.label(text="(not available in preview mode)", icon='INFO')
 
         box.prop(p, "post_laplacian")
         if p.post_laplacian:
@@ -1126,6 +1351,20 @@ class SVRC_PT_elastic_fit(Panel):
             col.label(text="Preserve Follow:")
             col.prop(p, "follow_neighbors")
 
+            col.separator()
+            col.label(text="Offset Fine Tuning:")
+            cloth_obj = p.clothing_obj
+            for i, og in enumerate(p.offset_groups):
+                row = col.row(align=True)
+                if cloth_obj and cloth_obj.type == 'MESH':
+                    row.prop_search(og, "group_name", cloth_obj, "vertex_groups", text="")
+                else:
+                    row.prop(og, "group_name", text="")
+                row.prop(og, "influence", text="", slider=True)
+                op = row.operator("efit.offset_group_remove", text="", icon='REMOVE')
+                op.index = i
+            col.operator("efit.offset_group_add", text="Add Group", icon='ADD')
+
         # -- Action buttons --
         layout.separator()
 
@@ -1153,6 +1392,7 @@ class SVRC_PT_elastic_fit(Panel):
 # ============================================================================
 
 _classes = (
+    EFitOffsetGroup,
     EFitProperties,
     EFIT_OT_fit,
     EFIT_OT_preview_apply,
@@ -1160,6 +1400,8 @@ _classes = (
     EFIT_OT_remove,
     EFIT_OT_reset_defaults,
     EFIT_OT_clear_blockers,
+    EFIT_OT_offset_group_add,
+    EFIT_OT_offset_group_remove,
     SVRC_PT_elastic_fit,
 )
 
